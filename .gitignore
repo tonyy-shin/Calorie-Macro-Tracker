@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Virtual environment
+venv/
+.venv/
+
+# Secrets — PG_PASSWORD is exported per-session, but guard against a future .env
+.env
+*.env
+
+# Raw data dumps — USDA/OFF bronze CSVs, too large and not ours to redistribute
+data/
+*.csv
+*.csv.gz
+*.zip
+
+# Postgres dumps/backups
+*.sql.gz
+*.dump
+
+# OS/editor cruft
+.DS_Store
+.vscode/
+.idea/
+workspace.code-workspace
