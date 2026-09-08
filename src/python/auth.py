@@ -16,7 +16,7 @@ def register_user(conn, email, password):
         @param conn - connection with database
         @param email - user's email
         @param password - user's actual password (not hashed yet)
-        @return None
+        @return user_id or None
         """
         hashed_pwd = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         try:
