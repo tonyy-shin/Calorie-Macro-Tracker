@@ -108,4 +108,46 @@ def log_ad_hoc_meal(conn, user_id: int, log_date, meal_name: str, items: list[tu
                         cur.execute(insert_items, params)
 
         return meal_log_id
-        
+
+
+
+def get_daily_rollup(conn, user_id: int, log_date):
+        """
+        Gets the specified day's calories and macros.
+        @param conn - database connection
+        @param user_id - the user's id
+        @param log_date - the meal log date
+        @return the day's (kcal, protein, carbs, fat, and a list(meal_names)
+        """
+        get_kcal_macros = """
+                                select  coalesce(sum(kcal), 0),
+                                        coalesce(sum(protein_g), 0),
+                                        coalesce(sum(carbs_g), 0),
+                                        coalesce(sum(fat_g), 0)
+                                from meal_log
+                                where user_id = %s and log_date = %s
+                          """
+        get_meal_names = """
+                                select meal_name from meal_log
+                                where user_id = %s and log_date = %s
+                                order by logged_at, id
+                         """
+
+        with conn.cursor() as cur:
+                cur.execute(get_kcal_macros, (user_id, log_date))
+                kcal_macros = cur.fetchone()
+                kcal, protein_g, carbs_g, fat_g = kcal_macros
+                cur.execute(get_meal_names, (user_id, log_date))
+                meal_names = cur.fetchall()
+                
+                meals = []
+                for (name,) in meal_names:
+                        meals.append(name if name is not None else "Untitled")
+
+                return {
+                        "kcal": kcal,
+                        "protein_g": protein_g,
+                        "carbs_g": carbs_g,
+                        "fat_g": fat_g,
+                        "meal_names": meals,
+                }
