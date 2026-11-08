@@ -1,106 +1,259 @@
 # Calorie & Macro Tracker
 
-A data pipeline project, not a CRUD app. Bulk nutrition data from USDA and
-Open Food Facts is ingested, transformed through a bronze → silver → gold
-architecture in SQL, and served through a small multi-user Streamlit app.
+A data pipeline with an app on top, not a CRUD app. About 4.7 million foods
+from USDA FoodData Central and Open Food Facts are ingested in bulk,
+transformed through a bronze → silver → gold medallion architecture written
+entirely in SQL, and kept current by a scheduled daily incremental job. A
+multi-user Streamlit app reads from the result to log meals, build recipes,
+and track daily calories and macros.
+
 The pipeline is the portfolio piece; the app is what makes it usable.
 
-## Why this project exists
+## What it does
 
-Most beginner tracker apps are just forms writing to a table. This one is
-built to demonstrate real data engineering fundamentals: bulk ingestion,
-SQL-based transformation, idempotent reloads, and a schema with actual
-tradeoffs — not just a food log.
-
-## Tech stack
-
-- **PostgreSQL** — single `meal_tracker` database
-- **Python** (psycopg3) — moves bytes only; no transform logic in Python
-- **SQL** — all typing, cleaning, and transformation logic (bronze/silver/gold)
-- **Streamlit** — thin app layer on top of the finished schema
-- **Data sources** — [USDA FoodData Central](https://fdc.nal.usda.gov/) (bulk CSV) and [Open Food Facts](https://world.openfoodfacts.org/) (bulk + daily deltas)
+- **Search 4.7M foods**, ranked so your own foods and complete, plain-named
+  matches come first ("Banana" before "Banana nut muffin").
+- **Barcode lookup**: typed or scanned with the camera. Matches across
+  UPC-A / EAN-13 / GTIN-14 formats, and falls back to a live Open Food Facts
+  lookup for products newer than the local data.
+- **Log meals** built from individual foods, or as portions of a saved recipe.
+- **Recipes**: create, edit (ingredients, grams, yield) and delete.
+- **Edit or delete logged meals**, including moving them to another day.
+- **Home and Calendar pages** with daily calorie / protein / carb / fat totals.
+- **Manual foods** for anything missing, private to the user who added them.
+- **Daily data refresh**: new and changed products from Open Food Facts
+  land in the database every morning, with a run log and failure alerts in
+  the app's sidebar.
 
 ## Architecture
 
-**Medallion pattern, entirely in SQL:**
+```mermaid
+flowchart LR
+    USDA["USDA FoodData Central<br/>bulk CSV"]
+    OFFfull["Open Food Facts<br/>full dump"]
+    OFFdelta["Open Food Facts<br/>daily delta files"]
 
-- **Bronze** — raw USDA and Open Food Facts dumps, loaded via `COPY` exactly
-  as downloaded, untouched.
-- **Silver** — SQL transform step (`FILTER`, `CASE`, conditional
-  aggregation). USDA's long-format nutrients get pivoted, OFF's mixed
-  per-serving/per-100g fields get reconciled, and a calorie sanity check
-  (`kcal ≈ protein_g*4 + carbs_g*4 + fat_g*9`) filters bad rows.
-- **Gold** — `foods_source`, plus `recipes` and `meal_log` built on top.
-  What the app actually queries.
+    subgraph Postgres["PostgreSQL: meal_tracker"]
+        B["Bronze<br/>raw text, as downloaded"]
+        S["Silver<br/>typed, cleaned, outliers nulled,<br/>calorie check"]
+        G[("Gold<br/>foods_source")]
+        M[("foods_manual<br/>per user")]
+        V{{"foods view<br/>UNION ALL"}}
+        U[("recipes, meal_log<br/>per user")]
+        R[("pipeline_runs")]
+    end
 
-**One database, nine objects** — tables plus a `UNION ALL` view keep
-pipeline-owned data (`foods_source`) and user-owned data (`foods_manual`)
-physically separate while still queryable as one surface:
+    App["Streamlit app"]
 
-| Table | Owner | Purpose |
-|---|---|---|
-| `users` | — | Accounts: email + hashed password |
-| `foods_source` | pipeline | USDA + OFF nutrition data, shared |
-| `foods_manual` | user | Hand-typed entries, scoped per user |
-| `foods` *(view)* | — | `foods_source UNION ALL foods_manual` |
-| `recipes` | user | Saved meals: name + yield in portions |
-| `recipe_items` | user | Ingredient list per recipe |
-| `meal_log` | user | Logged meals; snapshots macros at log time |
-| `meal_log_items` | user | Ad-hoc meal components |
-| `pipeline_runs` | pipeline | Ingestion job history — source, status, row counts |
-
-Full schema and design rationale: [`meal-prep-tracker-overview.md`](./meal-prep-tracker-overview.md)
-
-## Key design decisions
-
-- **ELT, not ETL** — Python only fetches and decompresses files; all
-  transformation happens in SQL.
-- **Bulk CSV over live API** — both sources rate-limit or discourage bulk
-  API polling; flat exports map cleanly onto `COPY`.
-- **Staging table + transactional swap for USDA** (monthly, full reload) —
-  **`ON CONFLICT` upsert for Open Food Facts** (daily deltas). Ingestion
-  mechanism matches how often each source actually changes.
-- **Macros stored per 100g, always** — recipe and daily totals are
-  computed via query, never stored as totals.
-- **`meal_log` snapshots totals at log time** — editing a recipe later
-  doesn't retroactively change what was already logged.
-- **Manual foods are scoped per user** via `user_id` — one person's
-  hand-typed entry never leaks into another user's search results.
-
-## Project status
-
-- ✅ **Phase 0 — Environment**: PostgreSQL + Python venv set up, connectivity confirmed
-- 🔄 **Phase 1 — Bronze ingestion**: Landing raw USDA FoodData Central CSVs (`food`, `nutrient`, `food_nutrient`, `branded_food`) into bronze tables
-- ⬜ Phase 2 — Silver/Gold transform (initial backfill)
-- ⬜ Phase 3 — Users and auth
-- ⬜ Phase 4 — Manual entries + unified `foods` view
-- ⬜ Phase 5 — Meal logging
-- ⬜ Phase 6 — Recipes
-- ⬜ Phase 7 — Streamlit app
-- ⬜ Phase 8 — Incremental (OFF daily delta) ingestion
-- ⬜ Phase 9 — Extensions (targets, trend charts)
-
-## Setup
-
-```bash
-# clone and enter the project
-git clone https://github.com/tonyyshin/Calorie-Macro-Tracker-Project.git
-cd Calorie-Macro-Tracker-Project
-
-# python environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# postgres
-createdb meal_tracker
-export PG_PASSWORD='your_password_here'
+    USDA -->|COPY| B
+    OFFfull -->|COPY| B
+    OFFdelta -->|daily job: COPY| B
+    B --> S
+    S -->|dedup + upsert| G
+    G --> V
+    M --> V
+    V --> App
+    U <--> App
+    OFFdelta -.->|logged| R
+    R -.->|freshness| App
 ```
 
-Raw data files (USDA/OFF exports) are not committed to this repo — download
-them separately from the sources linked above and place them locally before
-running ingestion scripts.
+**Medallion layers, all in SQL** (`src/sql/`):
 
-## License
+- **Bronze**: raw files loaded with `COPY` exactly as downloaded. All
+  columns are `TEXT`, so ingestion never fails on messy data.
+- **Silver**: typing and cleaning. Regex-guarded numeric casts, USDA's
+  long-format nutrients pivoted, physically impossible values nulled
+  (kcal > 900 or any macro > 100 g per 100 g), and a three-way
+  `calorie_check` flag comparing stated kcal with 4/4/9 × protein/carbs/fat
+  (20% tolerance).
+- **Gold**: `foods_source`, deduplicated by barcode (most complete,
+  newest row wins; USDA wins collisions with Open Food Facts).
 
-MIT
+**Python only moves bytes**: download, decompress, `COPY`, run the `.sql`
+files, record the run. No transformation logic lives in Python.
+
+### Schema
+
+| Object | Owner | Purpose |
+|---|---|---|
+| `users` | | Accounts: email + bcrypt-hashed password |
+| `foods_source` | pipeline | USDA + Open Food Facts nutrition data, per 100 g, shared |
+| `foods_manual` | user | Hand-entered foods, scoped to one user |
+| `foods` *(view)* | | `foods_source UNION ALL foods_manual`; every lookup reads this |
+| `recipes` / `recipe_items` | user | Saved recipes and their ingredients (grams) |
+| `meal_log` / `meal_log_items` | user | Logged meals with a macro snapshot, plus the foods behind ad hoc meals |
+| `pipeline_runs` | pipeline | One row per backfill / delta file: status, rows read and changed, errors, how current the data is |
+
+## Daily incremental ingestion
+
+Open Food Facts publishes one delta file per day listing every product that
+changed, and keeps the last 14 days. `src/python/off_pipeline.py`, run
+daily by a systemd timer, applies every file it hasn't applied yet, oldest
+first:
+
+1. Download the file, stream it into the bronze table with `COPY`.
+2. Run the silver SQL: parse JSON, cast, null outliers, calorie check.
+3. Upsert into `foods_source` with `INSERT … ON CONFLICT (barcode) DO UPDATE`.
+4. Record the result in `pipeline_runs`.
+
+Each file is applied in **one transaction**: it lands completely or not at
+all, and a failure stops the run so files are never applied out of order.
+
+The upsert follows four rules:
+
+- **Update in place, never rebuild.** `recipe_items` and `meal_log_items`
+  reference `foods_source.id`, so the table is never dropped or reloaded;
+  existing rows keep their ids.
+- **Newest wins.** Each row stores the source's `last_modified_t`; older
+  data can never overwrite newer, so replaying or reordering deltas is safe.
+- **USDA wins.** Open Food Facts never overwrites a USDA row.
+- **Only real changes are written.** Unchanged rows are skipped with
+  `IS DISTINCT FROM`, so the row count reflects actual changes.
+
+**Operational details:**
+
+- **Gap detection.** If the machine was off longer than the 14 days of
+  delta files, the run is flagged and the app shows a warning; running
+  `off_pipeline.py --full` streams the full dump through the same SQL to
+  catch up. The full refresh is batched and idempotent, so it can be stopped
+  and restarted safely.
+- **One run at a time.** A Postgres advisory lock prevents a daily run from
+  colliding with a running full refresh.
+- **Catch-up after sleep.** The systemd timer uses `Persistent=true` and
+  retries on failure.
+
+## Design decisions
+
+- **ELT, not ETL.** Bronze keeps the source exactly as delivered, so any
+  transform can be fixed and re-run from SQL without re-downloading.
+- **Bulk exports, not the live API, for ingestion.** Both sources ask bulk
+  consumers to use exports. The live Open Food Facts API is used only for a
+  single user-scanned barcode the local data doesn't have (Open Food Facts'
+  rule: one API call per real scan), and the result is saved as the user's
+  own food. The app never writes to the pipeline-owned table.
+- **Physical separation of pipeline and user data.** Separate tables,
+  joined by a `UNION ALL` view. The pipeline can't touch user data by
+  construction, not by convention.
+- **Macros stored per 100 g, always.** Recipe and daily totals are queries,
+  not stored columns.
+- **`meal_log` snapshots macros at log time.** Editing a recipe or a food
+  later never rewrites history. Changing a recipe meal's portions scales its
+  own snapshot, so it stays correct even after the recipe is deleted.
+- **Every query is parameterized.** Login and search input is a real trust
+  boundary.
+
+### Performance and correctness fixes
+
+- **One JSON parse per product.** The first version of the silver query let
+  Postgres inline a subquery and re-parse each ~15 KB product 14 times.
+  Forcing a single parse (`OFFSET 0`) cut a 20,000-product batch from
+  21 s to 3 s. Bronze and silver tables are `UNLOGGED`, since they're
+  rebuilt every batch.
+- **Barcode formats.** The same product appears as 12, 13 or 14 digits
+  depending on the source and scanner; lookups match all zero-padded forms.
+- **A silver bug found during Phase 8.** The Open Food Facts outlier step
+  was a copy of the USDA one, so impossible values were never cleared for
+  Open Food Facts rows; fixed, and corrected by the full refresh.
+
+## Project structure
+
+```
+src/
+  sql/
+    bronze/    raw load tables
+    silver/    typing, cleaning, outliers, calorie check
+    gold/      foods_source, user tables, foods view, OFF upsert
+    app/       users, pipeline_runs
+  python/
+    app.py               Streamlit app
+    auth.py              registration / login (bcrypt)
+    meal_logging.py      search, ad hoc meals, daily rollup
+    meal_editing.py      edit / delete logged meals
+    recipes.py           create / edit / delete / log recipes
+    manual_foods.py      user-entered foods
+    app_queries.py       recipe list, barcode lookup, data freshness
+    off_api.py           single-barcode Open Food Facts lookup
+    off_pipeline.py      daily delta + full refresh job
+    test_*.py            test suites
+deploy/
+  systemd/     off-update.service + .timer (daily job)
+  launcher/    desktop icon, start/stop script (auto-closes with the tab)
+  check_setup.sh   verifies files, database, schedule, launcher, tests
+work_log/      dated notes for every working session
+```
+
+## Running it
+
+Requires PostgreSQL 16+ and Python 3.11+.
+
+```bash
+git clone https://github.com/tonyy-shin/Calorie-Macro-Tracker.git
+cd Calorie-Macro-Tracker
+python3 -m venv ~/venv && source ~/venv/bin/activate
+pip install -r requirements.txt
+createdb meal_tracker
+```
+
+Database credentials go in `.streamlit/secrets.toml` (gitignored):
+
+```toml
+[db]
+dbname = "meal_tracker"
+user = "your_user"
+# host / password if not using local peer auth
+```
+
+Initial load: raw USDA and Open Food Facts exports aren't committed. Run the
+`src/sql` files layer by layer (bronze → silver → gold, then `app/`); the
+`work_log/` entries document the exact order and verification queries used.
+After that, the pipeline maintains itself:
+
+```bash
+python src/python/off_pipeline.py --full     # one-time catch-up, streams the full dump
+cp deploy/systemd/off-update.* ~/.config/systemd/user/
+systemctl --user enable --now off-update.timer
+
+streamlit run src/python/app.py              # or: bash deploy/launcher/install.sh
+```
+
+> ⚠️ Never re-run `src/sql/gold/create_foods_source.sql` on a live database.
+> It drops and rebuilds the table with new ids, breaking every saved recipe
+> and logged meal. Updates go through the upsert only.
+
+## Tests
+
+Seven suites with 230+ checks run against the real database, using
+throwaway users and January 1999 dates, and clean up after themselves.
+They cover auth-scoped visibility (one user can't see or edit another's
+data), no partial writes on failure, snapshot correctness, search ranking,
+barcode matching, and the ingestion job end to end with fake delta files:
+ids stay stable, USDA isn't overwritten, stale data is ignored, corrupt
+files roll back, and gaps are detected.
+
+```bash
+bash deploy/check_setup.sh      # checks the whole setup and runs every suite
+```
+
+## Status
+
+- ✅ Phase 0: Environment
+- ✅ Phase 1: Bronze ingestion (USDA + Open Food Facts)
+- ✅ Phase 2: Silver / gold transform, initial backfill (4.7M foods)
+- ✅ Phase 3: Users and auth
+- ✅ Phase 4: Manual foods and the unified `foods` view
+- ✅ Phase 5: Meal logging
+- ✅ Phase 6: Recipes
+- ✅ Phase 7: Streamlit app
+- ✅ Phase 8: Daily incremental ingestion (Open Food Facts)
+- ⬜ Next: USDA generic foods (Foundation + SR Legacy) for plain ingredients
+- ⬜ Phase 9: Daily targets, trend charts; monthly USDA refresh
+
+## Data sources and licenses
+
+- [Open Food Facts](https://world.openfoodfacts.org/): data available under
+  the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/);
+  contents under the Database Contents License.
+- [USDA FoodData Central](https://fdc.nal.usda.gov/): public domain (CC0).
+
+Code: MIT.

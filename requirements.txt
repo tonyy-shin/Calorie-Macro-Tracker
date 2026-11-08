@@ -6,3 +6,8 @@ psycopg-binary==3.3.4
 requests==2.34.2
 typing_extensions==4.16.0
 urllib3==2.7.0
+streamlit
+bcrypt
+# optional, for camera barcode scanning (also: sudo apt install libzbar0)
+# pyzbar
+# pillow
