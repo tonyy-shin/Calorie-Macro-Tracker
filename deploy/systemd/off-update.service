@@ -1,0 +1,22 @@
+# Phase 8: one run of the Open Food Facts daily update.
+# Installed as a systemd *user* unit; started by off-update.timer.
+# Logs: journalctl --user -u off-update
+# Paths use the ~/calorie-tracker symlink (the real folder name has spaces).
+# @author Tony Shin <tonyshin4065@gmail.com>
+
+[Unit]
+Description=Calorie-Macro-Tracker: apply new Open Food Facts deltas
+# Give up retrying after 4 failures within 2 hours (no retry loops)
+StartLimitIntervalSec=2h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/calorie-tracker/Calorie-Macro-Tracker
+ExecStart=%h/venv/bin/python src/python/off_pipeline.py
+# Network or Postgres not up yet after waking? Try again in 15 minutes.
+Restart=on-failure
+RestartSec=15min
+# Be gentle with the laptop while it runs
+Nice=10
+IOSchedulingClass=idle

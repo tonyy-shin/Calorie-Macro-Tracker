@@ -126,7 +126,12 @@ try:
         theirs_id = cur.fetchone()[0]
         cur.execute(insert_manual, (user_id, f"{term} nomacro", None, None, None, None))
         nomacro_id = cur.fetchone()[0]
-        manual_ids = [mine_id, theirs_id, nomacro_id]
+        # ranking fixtures: exact-name match and a longer name, both complete
+        cur.execute(insert_manual, (user_id, term, 50.0, 1.0, 1.0, 1.0))
+        exact_id = cur.fetchone()[0]
+        cur.execute(insert_manual, (user_id, f"{term} much longer name", 50.0, 1.0, 1.0, 1.0))
+        long_id = cur.fetchone()[0]
+        manual_ids = [mine_id, theirs_id, nomacro_id, exact_id, long_id]
 
         # source foods with full macros, ids above every manual id so
         # (id, 'manual') is guaranteed not to exist
@@ -156,6 +161,19 @@ try:
         names = [v for r in rows for v in r if isinstance(v, str)]
         check("other user sees only their own manual food",
               theirs_name in names and mine_name not in names, names)
+
+        # ranking: exact name, then shorter, then longer; missing macros last
+        rows = search_foods(conn, term, user_id)
+        order = [r[0] for r in rows]
+        check("exact name match ranks first", order[:1] == [exact_id], order)
+        check("shorter name ranks above longer name",
+              order.index(mine_id) < order.index(long_id), order)
+        check("food with missing macros ranks last", order[-1] == nomacro_id, order)
+
+        rows = search_foods(conn, "banana", user_id)
+        complete = [all(v is not None for v in r[4:8]) for r in rows]
+        check("source results: complete macros before incomplete",
+              complete == sorted(complete, reverse=True), complete)
 
         rows = search_foods(conn, f"{tag}nomatch'; drop table users; --", user_id)
         check("injection-shaped term returns nothing", len(rows) == 0)

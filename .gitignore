@@ -26,3 +26,5 @@ data/
 .vscode/
 .idea/
 workspace.code-workspace
+.streamlit/secrets.toml
+*.swp
