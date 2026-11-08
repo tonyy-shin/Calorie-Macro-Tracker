@@ -44,10 +44,14 @@ has src/sql/silver/null_off_delta_outliers.sql      'off_delta_silver'   "null_o
 has src/sql/silver/add_off_delta_calorie_check.sql  'calorie_check'      "add_off_delta_calorie_check.sql"
 has src/sql/gold/upsert_off_delta.sql               'ON CONFLICT (barcode)' "upsert_off_delta.sql"
 has src/sql/silver/null_off_outliers.sql            'UPDATE off_product_silver' "null_off_outliers.sql bug fix"
+has src/python/usda_generic_load.py     'def load'                        "usda_generic_load.py"
+has src/sql/gold/upsert_usda_generic.sql            'source_id'          "upsert_usda_generic.sql"
+has src/sql/gold/remove_usda_non_food_rows.sql      'sub_sample_food'    "remove_usda_non_food_rows.sql"
+has src/python/meal_logging.py         '(barcode is null) desc'          "meal_logging.py generic-first search"
 has deploy/systemd/off-update.service  'off_pipeline.py'                 "off-update.service"
 has deploy/systemd/off-update.timer    'Persistent=true'                 "off-update.timer"
 has deploy/launcher/macro-tracker.sh   'watchdog'                        "launcher (closes with the tab)"
-for t in test_manual_foods test_barcode test_meal_logging test_recipes test_recipe_editing test_meal_editing test_off_pipeline; do
+for t in test_manual_foods test_barcode test_meal_logging test_recipes test_recipe_editing test_meal_editing test_off_pipeline test_usda_generic; do
     [ -f "src/python/$t.py" ] && ok "$t.py present" || bad "$t.py missing"
 done
 [ -f "work_log/11_07_2026.md" ] && ok "worklog 11_07_2026.md" || note "worklog work_log/11_07_2026.md not saved yet"
@@ -83,6 +87,8 @@ else
     [ "$(sql "select count(*) from pg_indexes where tablename='foods_source' and indexdef like '%gin_trgm_ops%'")" -ge 1 ] \
         && ok "name search index (pg_trgm)" || note "no pg_trgm index on foods_source.name — searches will be slow"
     echo "   foods_source: $(sql "select to_char(count(*), 'FM9,999,999') from foods_source") rows"
+    g=$(sql "select count(*) from foods_source where source = 'usda' and source_id is not null" )
+    [ "${g:-0}" -gt 0 ] && ok "USDA generic foods loaded ($g)" || note "USDA generic foods not loaded (python src/python/usda_generic_load.py)"
 
     echo "== Open Food Facts updates"
     last=$(sql "select run_type || ' ' || status || ' ' || coalesce(to_char(finished_at, 'YYYY-MM-DD HH24:MI'), 'still going') from pipeline_runs order by id desc limit 1")
@@ -115,7 +121,7 @@ fi
 
 if [ "$1" != "--no-tests" ]; then
     echo "== Tests"
-    for t in test_manual_foods test_barcode test_meal_logging test_recipes test_recipe_editing test_meal_editing test_off_pipeline; do
+    for t in test_manual_foods test_barcode test_meal_logging test_recipes test_recipe_editing test_meal_editing test_off_pipeline test_usda_generic; do
         [ -f "src/python/$t.py" ] || continue
         out=$( cd src/python && "$PY" "$t.py" 2>&1 )
         summary=$(echo "$out" | grep -E "passed|ALL PASSED|SKIP" | tail -1)

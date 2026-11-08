@@ -145,6 +145,15 @@ The upsert follows four rules:
 
 ### Performance and correctness fixes
 
+- **Generic foods were missing or unusable.** The original USDA load
+  passed ~87,000 lab records (sample / sub-sample / acquisition rows, no
+  macros) through as if they were foods, and Foundation foods came through
+  with no calories because they report energy as Atwater kcal (nutrient
+  2047/2048), not 1008. `usda_generic_load.py` loads SR Legacy (Foundation optional)
+  with nutrient fallbacks, keyed by USDA's `fdc_id` (they have no barcode),
+  and removes the junk rows unless a recipe or meal references them.
+  Search now ranks generic foods ("Bananas, raw") ahead of branded ones.
+
 - **One JSON parse per product.** The first version of the silver query let
   Postgres inline a subquery and re-parse each ~15 KB product 14 times.
   Forcing a single parse (`OFFSET 0`) cut a 20,000-product batch from
@@ -175,6 +184,7 @@ src/
     app_queries.py       recipe list, barcode lookup, data freshness
     off_api.py           single-barcode Open Food Facts lookup
     off_pipeline.py      daily delta + full refresh job
+    usda_generic_load.py USDA SR Legacy generic foods (one-time, rerunnable)
     test_*.py            test suites
 deploy/
   systemd/     off-update.service + .timer (daily job)
@@ -223,7 +233,7 @@ streamlit run src/python/app.py              # or: bash deploy/launcher/install.
 
 ## Tests
 
-Seven suites with 230+ checks run against the real database, using
+Eight suites with 250+ checks run against the real database, using
 throwaway users and January 1999 dates, and clean up after themselves.
 They cover auth-scoped visibility (one user can't see or edit another's
 data), no partial writes on failure, snapshot correctness, search ranking,
@@ -246,7 +256,7 @@ bash deploy/check_setup.sh      # checks the whole setup and runs every suite
 - ✅ Phase 6: Recipes
 - ✅ Phase 7: Streamlit app
 - ✅ Phase 8: Daily incremental ingestion (Open Food Facts)
-- ⬜ Next: USDA generic foods (Foundation + SR Legacy) for plain ingredients
+- ✅ Phase 8b: USDA generic foods (SR Legacy, 7,793 foods), keyed by `fdc_id`
 - ⬜ Phase 9: Daily targets, trend charts; monthly USDA refresh
 
 ## Data sources and licenses

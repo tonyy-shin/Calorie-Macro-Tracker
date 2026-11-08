@@ -16,8 +16,10 @@ def search_foods(conn, search_term:str, user_id: int):
         @return the food's id, name, brand, origin, and macros, best match first:
                 1. the user's own manual foods
                 2. rows with all four macros (rows missing any can't be logged)
-                3. exact name match, then names starting with the term
-                4. shorter names (generic "Banana" before "Banana nut muffin")
+                3. generic foods (no barcode: USDA's "Bananas, raw") before
+                   branded products
+                4. exact name match, then names starting with the term
+                5. shorter names ("Banana" before "Banana nut muffin")
         """
         q = """
                 select id, name, brand, origin, kcal, protein_g, carbs_g, fat_g
@@ -28,6 +30,7 @@ def search_foods(conn, search_term:str, user_id: int):
                         (origin = 'manual') desc,
                         (kcal is not null and protein_g is not null
                          and carbs_g is not null and fat_g is not null) desc,
+                        (barcode is null) desc,
                         (lower(name) = lower(%(term)s)) desc,
                         (name ilike %(prefix)s) desc,
                         length(name),
