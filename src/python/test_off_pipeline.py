@@ -15,6 +15,7 @@ Run: python src/python/test_off_pipeline.py
 """
 
 import email.utils
+import sys
 import gzip
 import io
 import json
@@ -105,6 +106,12 @@ def last_run(cur, file_name):
 conn = psycopg.connect(job.DSN)
 log_conn = psycopg.connect(job.DSN, autocommit=True)
 cur = log_conn.cursor()
+
+# This test rebuilds the same bronze/silver tables the real job uses, so it
+# must never run at the same time as an update (e.g. a background --full).
+if not cur.execute("select pg_try_advisory_lock(%s)", (job.LOCK_ID,)).fetchone()[0]:
+    print("SKIP: an Open Food Facts update is running right now; run this test after it finishes")
+    raise SystemExit(0)
 
 try:
     job.setup(conn)
