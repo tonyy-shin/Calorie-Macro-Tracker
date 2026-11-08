@@ -13,16 +13,35 @@ def search_foods(conn, search_term:str, user_id: int):
         @param conn - connection to db
         @param search_term - the food we're searching for
         @param user_id - user's id
-        @return the food's id, name, brand, origin, and macros
+        @return the food's id, name, brand, origin, and macros, best match first:
+                1. the user's own manual foods
+                2. rows with all four macros (rows missing any can't be logged)
+                3. exact name match, then names starting with the term
+                4. shorter names (generic "Banana" before "Banana nut muffin")
         """
         q = """
                 select id, name, brand, origin, kcal, protein_g, carbs_g, fat_g
                 from foods
-                where name ilike %s and (origin = 'source' or user_id = %s)
+                where name ilike %(contains)s
+                  and (origin = 'source' or user_id = %(user_id)s)
+                order by
+                        (origin = 'manual') desc,
+                        (kcal is not null and protein_g is not null
+                         and carbs_g is not null and fat_g is not null) desc,
+                        (lower(name) = lower(%(term)s)) desc,
+                        (name ilike %(prefix)s) desc,
+                        length(name),
+                        id
                 limit 20;
         """
+        params = {
+                "contains": f"%{search_term}%",
+                "prefix": f"{search_term}%",
+                "term": search_term,
+                "user_id": user_id,
+        }
         with conn.cursor() as cur:
-                cur.execute(q, (f"%{search_term}%", user_id))
+                cur.execute(q, params)
                 return cur.fetchall()
 
 
