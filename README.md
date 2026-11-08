@@ -7,8 +7,6 @@ entirely in SQL, and kept current by a scheduled daily incremental job. A
 multi-user Streamlit app reads from the result to log meals, build recipes,
 and track daily calories and macros.
 
-The pipeline is the portfolio piece; the app is what makes it usable.
-
 ## What it does
 
 - **Search 4.7M foods**, ranked so your own foods and complete, plain-named
